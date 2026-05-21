@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import json
+import math
 import streamlit.components.v1 as components
 
 # ตั้งค่าหน้าเว็บแอปพลิเคชันแบบ Wide Layout คลีนๆ สไตล์ห้องเทรดมืออาชีพ
@@ -196,7 +197,7 @@ elif timeframe_choice == "1 วัน (Daily)":
 elif timeframe_choice == "1 สัปดาห์ (Weekly)":
     api_period = "2y" # รายสัปดาห์ ดึง 2 ปี
     api_interval = "1wk"
-else: # 1 เดือน (Monthly / 1 Year view accumulator)
+else: # 1 เดือน (Monthly)
     api_period = "5y" # รายเดือน ดึง 5 ปีสะสมดูโครงสร้างใหญ่
     api_interval = "1mo"
 
@@ -246,6 +247,11 @@ if active_ticker:
             # เคลียร์ค่าแถวข้อมูลที่มีค่าว่างให้พร้อมต่อการคำนวณสูตรเทคนิคัล
             df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
             
+            # ตรวจสอบและจัดการให้ข้อมูลเรียงตามลำดับเวลาและไม่มีซ้ำซ้อนอย่างเด็ดขาด (หัวใจของการตีกราฟ Lightweight Charts)
+            df.index = pd.to_datetime(df.index)
+            df = df[~df.index.duplicated(keep='first')]
+            df = df.sort_index()
+            
             # คำนวณอินดิเคเตอร์ทางเทคนิค (EMA20 & EMA50) สำหรับหาเทรนด์หลัก
             df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
             df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
@@ -272,21 +278,25 @@ if active_ticker:
             current_ema20 = df['EMA20'].iloc[-1]
             current_ema50 = df['EMA50'].iloc[-1]
             
+            # ป้องกันข้อผิดพลาดค่า NaN ในตัวแปรสนับสนุนเพื่อความปลอดภัยเมื่อยิงข้อมูลเข้า JavaScript
+            support_val = float(support) if (not pd.isna(support) and not math.isnan(support)) else 0.0
+            resistance_val = float(resistance) if (not pd.isna(resistance) and not math.isnan(resistance)) else 0.0
+            
             # ประเมินเกณฑ์เพื่อให้คะแนนจุดเข้าซื้อและจุดขายตามพฤติกรรมราคา
             score = 0
             alert_reasons = []
             
-            dist_to_support = (last_close - support) / support if support != 0 else 0
-            dist_to_resistance = (resistance - last_close) / last_close if last_close != 0 else 0
+            dist_to_support = (last_close - support_val) / support_val if support_val != 0 else 0
+            dist_to_resistance = (resistance_val - last_close) / last_close if last_close != 0 else 0
             
             if dist_to_support < 0.025:
                 score += 3
-                alert_reasons.append(f"ราคาลดลงมาใกล้แนวรับสำคัญที่ **${support:.2f}** (ห่างเพียง {dist_to_support*100:.1f}%) เริ่มยืนสร้างฐานได้มั่นคง ถือเป็นโอกาสเข้าสะสมที่ดี")
+                alert_reasons.append(f"ราคาลดลงมาใกล้แนวรับสำคัญที่ **${support_val:.2f}** (ห่างเพียง {dist_to_support*100:.1f}%) เริ่มยืนสร้างฐานได้มั่นคง ถือเป็นโอกาสเข้าสะสมที่ดี")
             elif dist_to_resistance < 0.025:
                 score -= 3
-                alert_reasons.append(f"ราคากำลังขึ้นไปชนแนวต้านเก่าที่ค่อนข้างหนาแน่นที่ **${resistance:.2f}** (ห่างเพียง {dist_to_resistance*100:.1f}%) ให้ระวังมีแรงขายล็อกกำไรระยะสั้น")
+                alert_reasons.append(f"ราคากำลังขึ้นไปชนแนวต้านเก่าที่ค่อนข้างหนาแน่นที่ **${resistance_val:.2f}** (ห่างเพียง {dist_to_resistance*100:.1f}%) ให้ระวังมีแรงขายล็อกกำไรระยะสั้น")
             else:
-                alert_reasons.append(f"ราคาแกว่งตัวอยู่ในโซนปกติ ระหว่างฐานแนวรับ ${support:.2f} ถึงกรอบแนวต้านด้านบนที่ ${resistance:.2f}")
+                alert_reasons.append(f"ราคาแกว่งตัวอยู่ในโซนปกติ ระหว่างฐานแนวรับ ${support_val:.2f} ถึงกรอบแนวต้านด้านบนที่ ${resistance_val:.2f}")
                 
             if last_close > current_ema20 > current_ema50:
                 score += 1.5
@@ -384,14 +394,14 @@ if active_ticker:
                     <div style="background-color: #111827; border: 1px solid #1f2937; padding: 16px; border-radius: 12px; font-family: 'Prompt';">
                         <span style="font-size: 11px; color: #9ca3af; display: block; margin-bottom: 4px;">🛡️ ขีดแนวรับสำคัญ</span>
                         <div>
-                            <span style="font-size: 24px; font-weight: 800; color: #10b981;">${support:.2f}</span>
+                            <span style="font-size: 24px; font-weight: 800; color: #10b981;">${support_val:.2f}</span>
                         </div>
                     </div>
                     <!-- Resistance Card -->
                     <div style="background-color: #111827; border: 1px solid #1f2937; padding: 16px; border-radius: 12px; font-family: 'Prompt';">
                         <span style="font-size: 11px; color: #9ca3af; display: block; margin-bottom: 4px;">🎯 ขีดแนวต้านสำคัญ</span>
                         <div>
-                            <span style="font-size: 24px; font-weight: 800; color: #ef4444;">${resistance:.2f}</span>
+                            <span style="font-size: 24px; font-weight: 800; color: #ef4444;">${resistance_val:.2f}</span>
                         </div>
                     </div>
                     <!-- RSI Card -->
@@ -427,7 +437,6 @@ if active_ticker:
             # ตระเตรียมและแปลงตารางข้อมูลย่อยให้กลายเป็นโครงสร้าง JSON เพื่อส่งให้กับ JavaScript ของห้องเทรด TradingView
             chart_data = []
             for idx, row in df.iterrows():
-                # ส่งค่าในรูปแบบ Unix Timestamp วินาที สำหรับเอนจินประมวลผล
                 chart_data.append({
                     "time": int(idx.timestamp()),
                     "open": float(row['Open']),
@@ -445,12 +454,14 @@ if active_ticker:
             st.markdown("<h3 style='font-size: 14px; font-weight: 700; color: white; margin-bottom: 12px; font-family: \"Prompt\";'>📉 กราฟราคาสดแท่งเทียน & ดัชนีโมเมนตัม (TradingView Lightweight Charts)</h3>", unsafe_allow_html=True)
             
             # ชุดโค้ด HTML/JS ทำงานบน Lightweight Charts แบบไร้รอยต่อ
+            # ป้องกันข้อผิดพลาดโดยการล็อกเวอร์ชัน CDN และบังคับขนาดพิกเซลแบบตายตัวให้กล่องเพนลเพื่อไม่ให้ส่วนโค้งพับไปเป็น 0px
             tradingview_html = f"""
             <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="UTF-8">
-                <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+                <!-- ใช้เสถียร CDN เวอร์ชัน 4.1.1 อย่างเป็นทางการเพื่อให้รองรับการประมวลผล Responsive และปัดเป่าอาการค้าง -->
+                <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
                 <style>
                     body {{
                         margin: 0;
@@ -463,14 +474,15 @@ if active_ticker:
                         flex-direction: column;
                         height: 580px;
                         width: 100%;
-                        gap: 12px;
                     }}
+                    /* ล็อกความสูงตายตัวตรงนี้เลยเพื่อป้องกันเบราว์เซอร์บีบกล่องแรปเลอร์เหลือ 0px */
                     #price-panel {{
-                        flex: 7;
+                        height: 380px;
                         width: 100%;
+                        margin-bottom: 12px;
                     }}
                     #rsi-panel {{
-                        flex: 3;
+                        height: 180px;
                         width: 100%;
                     }}
                 </style>
@@ -482,8 +494,8 @@ if active_ticker:
                 </div>
                 <script>
                     const chartData = {data_json};
-                    const suppLine = {support};
-                    const resLine = {resistance};
+                    const suppLine = {support_val:.2f};
+                    const resLine = {resistance_val:.2f};
 
                     // ตั้งค่ามาตรฐานกราฟหลัก
                     const baseChartOptions = {{
@@ -510,11 +522,17 @@ if active_ticker:
                         }}
                     }};
 
-                    // สถาปนาอินสแตนซ์ Price Chart และ RSI Chart
-                    const priceChart = LightweightCharts.createChart(document.getElementById('price-panel'), baseChartOptions);
+                    // สถาปนาอินสแตนซ์ Price Chart และ RSI Chart พร้อมความสูงที่เสถียร
+                    const priceChart = LightweightCharts.createChart(document.getElementById('price-panel'), {{
+                        ...baseChartOptions,
+                        width: document.getElementById('price-panel').clientWidth,
+                        height: 380
+                    }});
                     
                     const rsiChart = LightweightCharts.createChart(document.getElementById('rsi-panel'), {{
                         ...baseChartOptions,
+                        width: document.getElementById('rsi-panel').clientWidth,
+                        height: 180,
                         timeScale: {{
                             ...baseChartOptions.timeScale,
                             visible: false
@@ -641,12 +659,21 @@ if active_ticker:
                     rsiLine.setData(rsiPoints);
                     candleSeries.setMarkers(markers);
 
-                    // เชื่อมต่อการเลื่อนไทม์ไลน์ช่วงเวลา (Pans and Zooms Syncing) ให้ขยับพร้อมกัน
+                    // 🚨 ส่วนแก้ไขวิกฤต: สร้างตัวควบคุมการทำงานซ้อนวน (isSyncing) เพื่อตัดเส้นสัญญาณซิกแซกและการค้างคาของเพจ
+                    let isSyncing = false;
+                    
                     priceChart.timeScale().subscribeVisibleLogicalRangeChange(range => {{
+                        if (isSyncing) return;
+                        isSyncing = true;
                         rsiChart.timeScale().setVisibleLogicalRange(range);
+                        isSyncing = false;
                     }});
+                    
                     rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {{
+                        if (isSyncing) return;
+                        isSyncing = true;
                         priceChart.timeScale().setVisibleLogicalRange(range);
+                        isSyncing = false;
                     }});
 
                     // ปรับภาพรวมชาร์ตให้ครอบคลุมขอบเขตข้อมูลทั้งหมด
@@ -657,8 +684,8 @@ if active_ticker:
                     const resizeObserver = new ResizeObserver(entries => {{
                         for (let entry of entries) {{
                             const w = entry.contentRect.width;
-                            priceChart.resize(w, document.getElementById('price-panel').clientHeight);
-                            rsiChart.resize(w, document.getElementById('rsi-panel').clientHeight);
+                            priceChart.resize(w, 380);
+                            rsiChart.resize(w, 180);
                         }}
                     }});
                     resizeObserver.observe(document.getElementById('chart-wrapper'));
@@ -677,3 +704,4 @@ if active_ticker:
 
     except Exception as e:
         st.error(f"❌ เกิดข้อผิดพลาดในการดึงข้อมูลหรือจัดระดับวิเคราะห์: {e}")
+        
