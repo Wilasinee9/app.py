@@ -1,9 +1,9 @@
 import streamlit as st
 import yfinance as yf
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
+import json
+import streamlit.components.v1 as components
 
 # ตั้งค่าหน้าเว็บแอปพลิเคชันแบบ Wide Layout คลีนๆ สไตล์ห้องเทรดมืออาชีพ
 st.set_page_config(
@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 🚨 ตกแต่ง UI ด้วย CSS สด ป้องกันการเกิด Syntax Error ด้วยการไม่ใช้ f-string 🚨
+# 🚨 ตกแต่ง UI ด้วย CSS เพื่อเปลี่ยนหน้าตา Streamlit ให้เนียนตากระชับสไตล์ห้องเทรด 🚨
 st.markdown("""
     <head>
         <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -34,13 +34,17 @@ st.markdown("""
             border-right: 1px solid #1f2937 !important;
         }
         
-        /* แก้ไขช่องค้นหาตามคำขอ: พื้นหลังสีขาว ตัวอักษรขณะพิมพ์เป็นสีดำเข้มชัดเจน */
+        /* แก้ไขช่องค้นหาตามคำขอ: พื้นหลังสีขาว ตัวอักษรขณะพิมพ์และโฟกัสเป็นสีดำเข้มชัดเจน */
         div[data-testid="stTextInput"] input {
             color: #000000 !important; /* ตัวอักษรสีดำขณะพิมพ์ */
             font-weight: 600 !important;
             background-color: #ffffff !important;
             border: 2px solid #10b981 !important;
             border-radius: 8px !important;
+        }
+        div[data-testid="stTextInput"] input:focus {
+            color: #000000 !important;
+            background-color: #ffffff !important;
         }
         
         /* ตกแต่งกล่องเลือกตัวเลือก (Selectbox) */
@@ -124,7 +128,7 @@ with st.sidebar:
         target_ticker = search_input.upper().strip()
         st.session_state.active_ticker = target_ticker
 
-    # 📌 ปุ่มจัดการรายการโปรดแบบชัดเจน 2 ปุ่ม (เพิ่ม/ลบ)
+    # 📌 จัดกลุ่มปุ่มเพิ่มและลบรายการโปรดให้อยู่ใน "ระนาบแถวเดียวกัน" ด้วยสัดส่วนคอลัมน์ที่เท่ากัน
     st.markdown("<div style='margin-top: 5px; margin-bottom: 15px;'>", unsafe_allow_html=True)
     col_add, col_del = st.columns(2)
     with col_add:
@@ -134,7 +138,7 @@ with st.sidebar:
                 st.toast(f"เพิ่ม {target_ticker} เข้าในรายการโปรดแล้ว! ⭐")
                 st.rerun()
     with col_del:
-        # ใช้ container ครอบเพื่อให้ CSS ตกแต่งเป็นสีแดงสไตล์ปุ่มอันตราย
+        # ใช้ container คลาสพิเศษครอบ เพื่อให้สไตล์ปุ่มออกมาเป็นปุ่มอันตรายโทนสีแดง
         st.markdown("<div class='btn-danger'>", unsafe_allow_html=True)
         if st.button("❌ ลบออก", use_container_width=True):
             if target_ticker in st.session_state.watchlist:
@@ -156,33 +160,45 @@ with st.sidebar:
 
     st.markdown("<hr style='border-color: #1f2937; margin: 20px 0;'>", unsafe_allow_html=True)
     
-    # 📌 ส่วนเลือกไทม์เฟรมวิเคราะห์ราคา (Timeframe Selector) ครอบคลุมทุกความต้องการ
+    # 📌 ส่วนเลือกไทม์เฟรมวิเคราะห์ราคา (Timeframe Selector) ครอบคลุมตั้งแต่ 1 นาที ถึง 1 เดือน (1 ปีสะสม)
     st.markdown("<label style='font-size: 13px; font-weight: 500; color: #9ca3af;'>🕒 เลือกไทม์เฟรมวิเคราะห์ราคา (Timeframe)</label>", unsafe_allow_html=True)
     timeframe_choice = st.selectbox(
         "",
         options=[
+            "1 นาที (1m)",
+            "5 นาที (5m)",
             "15 นาที (15m)",
             "1 ชั่วโมง (1h)",
             "1 วัน (Daily)",
-            "1 สัปดาห์ (Weekly)"
+            "1 สัปดาห์ (Weekly)",
+            "1 เดือน (Monthly)"
         ],
-        index=2,
+        index=4,
         label_visibility="collapsed"
     )
 
-# กำหนดค่า Period และ Interval ให้สัมพันธ์กับไทม์เฟรมที่ผู้ใช้เลือกจริง
-if timeframe_choice == "15 นาที (15m)":
+# กำหนดค่า Period และ Interval ให้สัมพันธ์กับไทม์เฟรมที่ผู้ใช้เลือกจริง เพื่อจำกัดการดึงข้อมูลตามเงื่อนไขของ API
+if timeframe_choice == "1 นาที (1m)":
+    api_period = "1d" # 1 นาที ย้อนหลังได้สูงสุด 7 วัน ดึง 1 วันเพื่อความรวดเร็วและปลอดภัยจาก Error
+    api_interval = "1m"
+elif timeframe_choice == "5 นาที (5m)":
+    api_period = "5d" # 5 นาที ย้อนหลังได้สูงสุด 5 วัน
+    api_interval = "5m"
+elif timeframe_choice == "15 นาที (15m)":
     api_period = "5d"
     api_interval = "15m"
 elif timeframe_choice == "1 ชั่วโมง (1h)":
-    api_period = "1mo"
+    api_period = "1mo" # รายชั่วโมง ดึง 1 เดือน
     api_interval = "60m"
 elif timeframe_choice == "1 วัน (Daily)":
-    api_period = "1y"
+    api_period = "1y" # รายวัน ดึง 1 ปี
     api_interval = "1d"
-else: # 1 สัปดาห์ (Weekly)
-    api_period = "2y"
+elif timeframe_choice == "1 สัปดาห์ (Weekly)":
+    api_period = "2y" # รายสัปดาห์ ดึง 2 ปี
     api_interval = "1wk"
+else: # 1 เดือน (Monthly / 1 Year view accumulator)
+    api_period = "5y" # รายเดือน ดึง 5 ปีสะสมดูโครงสร้างใหญ่
+    api_interval = "1mo"
 
 active_ticker = st.session_state.active_ticker
 
@@ -408,119 +424,255 @@ if active_ticker:
                 </div>
             """, unsafe_allow_html=True)
 
-            # โซนวาดกราฟเทคนิคัลระดับโปรที่ซูม-ลากดูราคาได้ (Plotly Interactive Chart)
-            st.markdown("<h3 style='font-size: 14px; font-weight: 700; color: white; margin-bottom: 12px; font-family: \"Prompt\";'>📉 กราฟราคาสดแท่งเทียน & ดัชนีโมเมนตัม</h3>", unsafe_allow_html=True)
+            # ตระเตรียมและแปลงตารางข้อมูลย่อยให้กลายเป็นโครงสร้าง JSON เพื่อส่งให้กับ JavaScript ของห้องเทรด TradingView
+            chart_data = []
+            for idx, row in df.iterrows():
+                # ส่งค่าในรูปแบบ Unix Timestamp วินาที สำหรับเอนจินประมวลผล
+                chart_data.append({
+                    "time": int(idx.timestamp()),
+                    "open": float(row['Open']),
+                    "high": float(row['High']),
+                    "low": float(row['Low']),
+                    "close": float(row['Close']),
+                    "ema20": float(row['EMA20']) if not pd.isna(row['EMA20']) else None,
+                    "ema50": float(row['EMA50']) if not pd.isna(row['EMA50']) else None,
+                    "rsi": float(row['RSI']) if not pd.isna(row['RSI']) else None
+                })
             
-            # คัดลอกตารางข้อมูลสำหรับนำไปเขียนกราฟ
-            df_chart = df.copy()
+            data_json = json.dumps(chart_data)
+
+            # 📉 วาดกราฟเทคนิคัลด้วย TradingView Lightweight Charts เพื่อยกระดับความลื่นไหลระดับสากล
+            st.markdown("<h3 style='font-size: 14px; font-weight: 700; color: white; margin-bottom: 12px; font-family: \"Prompt\";'>📉 กราฟราคาสดแท่งเทียน & ดัชนีโมเมนตัม (TradingView Lightweight Charts)</h3>", unsafe_allow_html=True)
             
-            # กำหนดจุดปักหมุดสัญญาณ BUY และ SELL บนชาร์ตแท่งเทียนให้ดูง่าย
-            df_chart['Buy_Marker'] = np.nan
-            df_chart['Sell_Marker'] = np.nan
-            df_chart.loc[df_chart['RSI'] < 33, 'Buy_Marker'] = df_chart['Low'] * 0.985
-            df_chart.loc[df_chart['RSI'] > 67, 'Sell_Marker'] = df_chart['High'] * 1.015
+            # ชุดโค้ด HTML/JS ทำงานบน Lightweight Charts แบบไร้รอยต่อ
+            tradingview_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+                <style>
+                    body {{
+                        margin: 0;
+                        padding: 0;
+                        background-color: #0b0f19;
+                        overflow: hidden;
+                    }}
+                    #chart-wrapper {{
+                        display: flex;
+                        flex-direction: column;
+                        height: 580px;
+                        width: 100%;
+                        gap: 12px;
+                    }}
+                    #price-panel {{
+                        flex: 7;
+                        width: 100%;
+                    }}
+                    #rsi-panel {{
+                        flex: 3;
+                        width: 100%;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div id="chart-wrapper">
+                    <div id="price-panel"></div>
+                    <div id="rsi-panel"></div>
+                </div>
+                <script>
+                    const chartData = {data_json};
+                    const suppLine = {support};
+                    const resLine = {resistance};
 
-            # สร้าง Subplots สำหรับแยก 2 แผงกราฟ (บน: ราคากลุ่มแท่งเทียน, ล่าง: แถบดัชนี RSI)
-            fig = make_subplots(
-                rows=2, cols=1, 
-                shared_xaxes=True, 
-                vertical_spacing=0.08, 
-                row_heights=[0.72, 0.28]
-            )
+                    // ตั้งค่ามาตรฐานกราฟหลัก
+                    const baseChartOptions = {{
+                        layout: {{
+                            background: {{ type: 'solid', color: '#0b0f19' }},
+                            textColor: '#9ca3af',
+                            fontSize: 11,
+                            fontFamily: 'Inter, Prompt, sans-serif'
+                        }},
+                        grid: {{
+                            vertLines: {{ color: '#1f2937' }},
+                            horzLines: {{ color: '#1f2937' }}
+                        }},
+                        rightPriceScale: {{
+                            borderColor: '#374151'
+                        }},
+                        timeScale: {{
+                            borderColor: '#374151',
+                            timeVisible: true,
+                            secondsVisible: false
+                        }},
+                        crosshair: {{
+                            mode: 0
+                        }}
+                    }};
 
-            # กราฟด้านบน: แท่งเทียน (Candlesticks) โทนสีเขียวแดงคมชัดลึก
-            fig.add_trace(go.Candlestick(
-                x=df_chart.index,
-                open=df_chart['Open'],
-                high=df_chart['High'],
-                low=df_chart['Low'],
-                close=df_chart['Close'],
-                name="ราคา",
-                increasing_line_color='#10b981', 
-                decreasing_line_color='#ef4444',
-                increasing_fillcolor='#10b981',
-                decreasing_fillcolor='#ef4444'
-            ), row=1, col=1)
+                    // สถาปนาอินสแตนซ์ Price Chart และ RSI Chart
+                    const priceChart = LightweightCharts.createChart(document.getElementById('price-panel'), baseChartOptions);
+                    
+                    const rsiChart = LightweightCharts.createChart(document.getElementById('rsi-panel'), {{
+                        ...baseChartOptions,
+                        timeScale: {{
+                            ...baseChartOptions.timeScale,
+                            visible: false
+                        }}
+                    }});
 
-            # เพิ่มเส้นเฉลี่ยความเร็วแนวโน้มระยะสั้น EMA20
-            fig.add_trace(go.Scatter(
-                x=df_chart.index, y=df_chart['EMA20'],
-                line=dict(color='#3b82f6', width=1.8),
-                name='แนวโน้มระยะสั้น (EMA 20)'
-            ), row=1, col=1)
+                    // กำหนดซีรีส์แท่งเทียน Candlestick
+                    const candleSeries = priceChart.addCandlestickSeries({{
+                        upColor: '#10b981',
+                        downColor: '#ef4444',
+                        borderVisible: false,
+                        wickUpColor: '#10b981',
+                        wickDownColor: '#ef4444'
+                    }});
+
+                    // กำหนดซีรีส์เส้นเทรนหลัก EMA
+                    const ema20Line = priceChart.addLineSeries({{
+                        color: '#3b82f6',
+                        lineWidth: 1.8,
+                        priceLineVisible: false
+                    }});
+
+                    const ema50Line = priceChart.addLineSeries({{
+                        color: '#f43f5e',
+                        lineWidth: 1.8,
+                        priceLineVisible: false
+                    }});
+
+                    // กำหนดซีรีส์ RSI
+                    const rsiLine = rsiChart.addLineSeries({{
+                        color: '#a855f7',
+                        lineWidth: 2,
+                        priceLineVisible: false
+                    }});
+
+                    // วาดขีดระดับแนวรับ/แนวต้านสำคัญลงบนซีรีส์แท่งเทียน
+                    candleSeries.createPriceLine({{
+                        price: suppLine,
+                        color: '#10b981',
+                        lineWidth: 1.5,
+                        lineStyle: 1, // Dashed
+                        axisLabelVisible: true,
+                        title: 'SUPPORT (แนวรับ)'
+                    }});
+
+                    candleSeries.createPriceLine({{
+                        price: resLine,
+                        color: '#ef4444',
+                        lineWidth: 1.5,
+                        lineStyle: 1, // Dashed
+                        axisLabelVisible: true,
+                        title: 'RESISTANCE (แนวต้าน)'
+                    }});
+
+                    // กำหนดดัชนีแบ่งเขตความโลภ/ความกลัว (70 Overbought, 30 Oversold)
+                    rsiLine.createPriceLine({{
+                        price: 70,
+                        color: '#ef4444',
+                        lineWidth: 1,
+                        lineStyle: 2, // Dotted
+                        axisLabelVisible: true,
+                        title: '70 (Overbought)'
+                    }});
+
+                    rsiLine.createPriceLine({{
+                        price: 30,
+                        color: '#10b981',
+                        lineWidth: 1,
+                        lineStyle: 2, // Dotted
+                        axisLabelVisible: true,
+                        title: '30 (Oversold)'
+                    }});
+
+                    // คัดแยกโครงสร้างวัตถเพื่อจัดหมวดหมู่ข้อมูล
+                    const priceCandles = [];
+                    const ema20Points = [];
+                    const ema50Points = [];
+                    const rsiPoints = [];
+                    const markers = [];
+
+                    chartData.forEach(item => {{
+                        priceCandles.push({{
+                            time: item.time,
+                            open: item.open,
+                            high: item.high,
+                            low: item.low,
+                            close: item.close
+                        }});
+
+                        if (item.ema20 !== null) {{
+                            ema20Points.push({{ time: item.time, value: item.ema20 }});
+                        }}
+                        if (item.ema50 !== null) {{
+                            ema50Points.push({{ time: item.time, value: item.ema50 }});
+                        }}
+                        if (item.rsi !== null) {{
+                            rsiPoints.push({{ time: item.time, value: item.rsi }});
+                        }}
+
+                        // บัญญัติเงื่อนไขสัญญาณ BUY / SELL จากอินดิเคเตอร์ RSI
+                        if (item.rsi !== null && item.rsi < 33) {{
+                            markers.push({{
+                                time: item.time,
+                                position: 'belowBar',
+                                color: '#10b981',
+                                shape: 'arrowUp',
+                                text: 'BUY'
+                            }});
+                        }} else if (item.rsi !== null && item.rsi > 67) {{
+                            markers.push({{
+                                time: item.time,
+                                position: 'aboveBar',
+                                color: '#ef4444',
+                                shape: 'arrowDown',
+                                text: 'SELL'
+                            }});
+                        }}
+                    }});
+
+                    // ป้อนข้อมูลสู่แต่ละหน่วยแสดงผล
+                    candleSeries.setData(priceCandles);
+                    ema20Line.setData(ema20Points);
+                    ema50Line.setData(ema50Points);
+                    rsiLine.setData(rsiPoints);
+                    candleSeries.setMarkers(markers);
+
+                    // เชื่อมต่อการเลื่อนไทม์ไลน์ช่วงเวลา (Pans and Zooms Syncing) ให้ขยับพร้อมกัน
+                    priceChart.timeScale().subscribeVisibleLogicalRangeChange(range => {{
+                        rsiChart.timeScale().setVisibleLogicalRange(range);
+                    }});
+                    rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {{
+                        priceChart.timeScale().setVisibleLogicalRange(range);
+                    }});
+
+                    // ปรับภาพรวมชาร์ตให้ครอบคลุมขอบเขตข้อมูลทั้งหมด
+                    priceChart.timeScale().fitContent();
+                    rsiChart.timeScale().fitContent();
+
+                    // ตรวจจับพิกัดเพื่อจัดโครงสร้างเรสปอนซีฟอัตโนมัติเมื่อขนาดหน้าจอเปลี่ยนแปลง
+                    const resizeObserver = new ResizeObserver(entries => {{
+                        for (let entry of entries) {{
+                            const w = entry.contentRect.width;
+                            priceChart.resize(w, document.getElementById('price-panel').clientHeight);
+                            rsiChart.resize(w, document.getElementById('rsi-panel').clientHeight);
+                        }}
+                    }});
+                    resizeObserver.observe(document.getElementById('chart-wrapper'));
+                </script>
+            </body>
+            </html>
+            """
             
-            # เพิ่มเส้นเฉลี่ยความเร็วแนวโน้มระยะกลาง EMA50
-            fig.add_trace(go.Scatter(
-                x=df_chart.index, y=df_chart['EMA50'],
-                line=dict(color='#f43f5e', width=1.8),
-                name='แนวโน้มระยะกลาง (EMA 50)'
-            ), row=1, col=1)
-
-            # ตีเส้นประแนวต้านและแนวรับของพฤติกรรมรอบราคาปัจจุบัน
-            fig.add_trace(go.Scatter(
-                x=[df_chart.index[0], df_chart.index[-1]], 
-                y=[resistance, resistance],
-                mode="lines",
-                line=dict(color="#ef4444", width=1.5, dash="dash"),
-                name="เส้นสังเกตการณ์: แนวต้าน"
-            ), row=1, col=1)
-
-            fig.add_trace(go.Scatter(
-                x=[df_chart.index[0], df_chart.index[-1]], 
-                y=[support, support],
-                mode="lines",
-                line=dict(color="#10b981", width=1.5, dash="dash"),
-                name="เส้นสังเกตการณ์: แนวรับ"
-            ), row=1, col=1)
-
-            # ใส่สัญลักษณ์ลูกศรปักหมุดชี้ช่องสัญญานซื้อสะสม (BUY) และสัญญานสกัดขาย (SELL) ชัดเจนสวยงาม
-            fig.add_trace(go.Scatter(
-                x=df_chart.index, y=df_chart['Buy_Marker'],
-                mode='markers',
-                marker=dict(symbol='triangle-up', size=13, color='#10b981', line=dict(width=1.2, color='white')),
-                name='จุดลุ้นเข้าสะสม (BUY)'
-            ), row=1, col=1)
-
-            fig.add_trace(go.Scatter(
-                x=df_chart.index, y=df_chart['Sell_Marker'],
-                mode='markers',
-                marker=dict(symbol='triangle-down', size=13, color='#ef4444', line=dict(width=1.2, color='white')),
-                name='จุดพึงระวังแรงขาย (SELL)'
-            ), row=1, col=1)
-
-            # กราฟด้านล่าง: แผงโมเมนตัมวัดปริมาณการซื้อขายมากเกินไป/น้อยเกินไป (RSI Panel)
-            fig.add_trace(go.Scatter(
-                x=df_chart.index, y=df_chart['RSI'],
-                line=dict(color='#a855f7', width=2),
-                name='ระดับโมเมนตัม RSI'
-            ), row=2, col=1)
-
-            # ปรับแต่งสภาพแวดล้อมรวมถึงสีกราฟทั้งหมดให้ออกแนวโมเดิร์นดาร์กสเปซกลมกลืนกับหน้าเว็บ
-            fig.update_layout(
-                xaxis_rangeslider_visible=False,
-                template="plotly_dark",
-                paper_bgcolor='#0b0f19',
-                plot_bgcolor='#0b0f19',
-                font=dict(color='#9ca3af', family='Inter, Prompt', size=10),
-                height=580,
-                margin=dict(l=40, r=40, t=10, b=10),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor='rgba(0,0,0,0)')
-            )
-            
-            # ตกแต่งเส้นพิกัดตารางแผนผัง
-            fig.update_xaxes(showgrid=True, gridcolor='#1f2937', linecolor='#374151')
-            fig.update_yaxes(title_text="ระดับราคา ($)", showgrid=True, gridcolor='#1f2937', linecolor='#374151', row=1, col=1)
-            fig.update_yaxes(title_text="ระดับ RSI", range=[10, 90], showgrid=True, gridcolor='#1f2937', linecolor='#374151', row=2, col=1)
-            
-            # มาร์กเกอร์เส้นมาตรฐานขีด 70 (Overbought) และขีด 30 (Oversold)
-            fig.add_shape(type="line", x0=df_chart.index[0], x1=df_chart.index[-1], y0=70, y1=70, line=dict(color="#ef4444", width=1, dash="dot"), row=2, col=1)
-            fig.add_shape(type="line", x0=df_chart.index[0], x1=df_chart.index[-1], y0=30, y1=30, line=dict(color="#10b981", width=1, dash="dot"), row=2, col=1)
-
-            st.plotly_chart(fig, use_container_width=True)
+            # โหลดส่วนประกอบ HTML Component ลงบนสตรีมลิตอย่างสมบูรณ์แบบ
+            components.html(tradingview_html, height=595)
 
             # แผงตารางขยายดูรายงานราคาย้อนหลังรายแถวข้อมูลจริง
             with st.expander("📝 เปิดดูตารางวิเคราะห์สถิติตัวเลขย้อนหลังเพิ่มเติม"):
-                df_show = df_chart[['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'EMA20']].sort_index(ascending=False)
+                df_show = df[['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'EMA20']].sort_index(ascending=False)
                 st.dataframe(df_show, use_container_width=True)
 
     except Exception as e:
